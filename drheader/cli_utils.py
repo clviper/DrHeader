@@ -10,6 +10,8 @@ import os
 
 from junit_xml import TestSuite, TestCase
 
+from urllib.parse import urlparse
+
 
 def echo_bulk_report(audit, json_output=False):
     """
@@ -62,4 +64,63 @@ def file_junit_report(rules, report):
     os.makedirs('reports', exist_ok=True)
     with open('reports/junit.xml', 'w') as f:
         TestSuite.to_file(f, [TestSuite(name='DrHeader', test_cases=test_cases)], prettyprint=False)
+        f.close()
+
+
+def message_to_human(message,header,rule):
+    if message == 'Must-Contain-One directive missed':
+        return "* Is missing one of the following mandatory values: `{0}`".format('`,`'.join(rule['expected']))
+    elif message == 'Value does not match security policy':
+        return "* The currently configured value `{1}` does not match the required value: `{0}`".format(','.join(rule['expected']),rule['value'])
+    elif message == 'Header should not be returned':
+        return f"* This Header should not be returned in HTTP responses."
+    elif message == 'Must-Avoid directive included':
+        return "* The currently configured value contains `{0}`, that must be avoided.".format(''.join(rule['anomaly']))
+    elif message == 'Must-Contain directive missed':
+        return f"* The currently configured value is missing mandatory directives: `{0}`".format('`,`'.join(rule['expected']))
+    elif message == 'Header not included in response':
+        return "* Is not included in the HTTP responses."
+
+
+def format_mitigation(message,mitigation,rule):
+    if message == 'Must-Contain-One directive missed':
+        return mitigation.format('`,`'.join(rule['expected']))
+    elif message == 'Value does not match security policy':
+        return mitigation.format(','.join(rule['expected']))
+    elif message == 'Must-Avoid directive included':
+        return mitigation.format(''.join(rule['anomaly']))
+    elif message == 'Must-Contain directive missed':
+        return mitigation.format('`,`'.join(rule['expected']))
+    elif message == 'Header not included in response':
+        return rule['mitigation']
+    else:
+        return mitigation
+
+def get_issue_list_by_rule(rule,audit):
+    issue_list = []
+    for entry in audit:
+        if entry['rule'] == rule:
+           issue_list.append(message_to_human(message=entry['message'],header=entry['rule'],rule=entry))
+    return issue_list
+
+
+def markdown_vulnerability_report(audit,report_definitions,url):
+    url_parsed_object = urlparse(url)
+    used_rule_list = []
+    os.makedirs('reports', exist_ok=True)
+    with open(f"reports/{url_parsed_object.scheme}_{url_parsed_object.netloc}_report.md", 'w') as f:
+        f.write("## Improper Headers Configuration")
+        f.write("\r\n\r\n")
+        for entry in audit:
+            if entry['rule'] not in used_rule_list:
+                used_rule_list.append(entry['rule'])
+                issue_list = get_issue_list_by_rule(rule=entry['rule'],audit=audit)
+                f.write(f"#### The header {entry['rule']} is incorrectly configured due to:\r\n\r\n")
+                for issue in issue_list:
+                    f.write(issue)
+                    f.write("\r\n")
+                f.write("\r\n")
+                f.write(f"{report_definitions[entry['rule']]['Description']}")
+                f.write("\r\n\r\n")
+                f.write(format_mitigation(message=entry['message'],mitigation=report_definitions[entry['rule']]['Mitigation'],rule=entry))
         f.close()

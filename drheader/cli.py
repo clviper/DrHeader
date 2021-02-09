@@ -14,8 +14,8 @@ from tabulate import tabulate
 
 from drheader import Drheader
 from drheader import __version__
-from drheader.cli_utils import echo_bulk_report, file_junit_report
-from drheader.utils import load_rules, get_rules_from_uri
+from drheader.cli_utils import echo_bulk_report, file_junit_report,markdown_vulnerability_report
+from drheader.utils import load_rules,load_report_definitions, get_rules_from_uri
 
 
 EXIT_CODE_NO_ERROR = os.EX_OK
@@ -38,8 +38,9 @@ def main():
 @main.group()
 @click.option('--verify', '--verify-enable', default=True, help='Bool indicating SSL verification')
 @click.option('--certs', '--certificates', help='Path to certificate bundle')
+@click.option('--disable-redirects', '--disable_redirects',default=False, help='Disable follow redirects',is_flag=True)
 @click.pass_context
-def scan(ctx, verify, certs):
+def scan(ctx, verify, certs, disable_redirects):
     """Scan endpoints with drheader."""
     ctx.ensure_object(dict)
     if certs:
@@ -47,6 +48,10 @@ def scan(ctx, verify, certs):
     else:
         verify = click.BOOL(verify)
     ctx.obj['verify'] = verify
+    if disable_redirects:
+        ctx.obj['disable_redirects'] = True
+    else:
+        ctx.obj['disable_redirects'] = False
 
 
 @main.command()
@@ -147,8 +152,9 @@ def compare(file, json_output, debug, rule_file, rule_uri, merge):
 @click.option('--rules-uri', 'rule_uri', help='Use custom rule set, downloaded from URI')
 @click.option('--merge', help='Merge custom file rules, on top of default rules', is_flag=True)
 @click.option('--junit', help='Produces a junit report with the result of the scan', is_flag=True)
+@click.option('--vulnerability-report','vulnerability_report', help='Produces markdown vulnerability report with all findings', is_flag=True)
 @click.pass_context
-def single(ctx, target_url, json_output, debug, rule_file, rule_uri, merge, junit):
+def single(ctx, target_url, json_output, debug, rule_file, rule_uri, merge, junit,vulnerability_report):
     """
     Scan a single http(s) endpoint with drheader.
 
@@ -173,11 +179,12 @@ def single(ctx, target_url, json_output, debug, rule_file, rule_uri, merge, juni
             else:
                 raise click.ClickException('No content retrieved from rules-uri.')
 
+    report_definitions = load_report_definitions()
     rules = load_rules(rule_file, merge)
 
     try:
         logging.debug('Querying headers...')
-        drheader_instance = Drheader(url=target_url, verify=ctx.obj['verify'])
+        drheader_instance = Drheader(url=target_url, verify=ctx.obj['verify'], disable_redirects=ctx.obj['disable_redirects'], report_definitions=report_definitions,rules=rules)
     except Exception as e:
         if debug:
             raise click.ClickException(e)
@@ -212,6 +219,9 @@ def single(ctx, target_url, json_output, debug, rule_file, rule_uri, merge, juni
                 click.echo(tabulate(values, tablefmt="presto"))
     if junit:
         file_junit_report(rules, drheader_instance.report)
+
+    if vulnerability_report:
+        markdown_vulnerability_report(audit=drheader_instance.report,report_definitions=report_definitions,url=target_url)
     sys.exit(exit_code)
 
 
@@ -226,7 +236,7 @@ def single(ctx, target_url, json_output, debug, rule_file, rule_uri, merge, juni
 @click.option('--rules-uri', 'rule_uri', help='Use custom rule set, downloaded from URI')
 @click.option('--merge', help='Merge custom file rules, on top of default rules', is_flag=True)
 @click.pass_context
-def bulk(ctx, file, json_output, post, input_format, debug, rule_file, rule_uri, merge):
+def bulk(ctx, file, json_output, post, input_format, debug, rule_file, rule_uri, merge, disable_redirects):
     """
     Scan multiple http(s) endpoints with drheader.
 
@@ -273,7 +283,6 @@ def bulk(ctx, file, json_output, post, input_format, debug, rule_file, rule_uri,
 
     if debug:
         logging.basicConfig(level=logging.DEBUG)
-
     if input_format == 'txt':
         urls_temp = list(filter(None, file.read().splitlines()))
         for i in urls_temp:
@@ -307,7 +316,7 @@ def bulk(ctx, file, json_output, post, input_format, debug, rule_file, rule_uri,
     for i, v in enumerate(urls):
         logging.debug('Querying: {}...'.format(v))
         drheader_instance = Drheader(
-            url=v['url'], post=post, params=v.get('params', None), verify=ctx.obj['verify'])
+            url=v['url'], post=post, params=v.get('params', None), verify=ctx.obj['verify'],disable_redirects=ctx.obj['disable_redirects'],rules=rules)
         logging.debug('Analysing: {}...'.format(v))
         drheader_instance.analyze(rules)
         audit.append({'url': v['url'], 'report': drheader_instance.report})

@@ -9,11 +9,6 @@ Headers:
         Must-Avoid:
         - unsafe-inline
         - unsafe-eval
-    X-XSS-Protection:
-        Required: True
-        Enforce: True
-        Value:
-        - 1; mode=block
     Server:
         Required: False
         Enforce: False
@@ -29,6 +24,8 @@ Headers:
         Value:
         - SAMEORIGIN
         - DENY
+        Description:
+        References:
     X-Content-Type-Options:
         Required: True
         Enforce: True

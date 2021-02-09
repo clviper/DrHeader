@@ -3,7 +3,7 @@ import json
 import requests
 import validators
 
-from drheader.utils import load_rules
+from drheader.utils import load_rules, load_report_definitions
 
 
 class Drheader:
@@ -28,7 +28,10 @@ class Drheader:
         post=None,
         params=None,
         request_headers={},
-        verify=True
+        verify=True,
+        disable_redirects = False,
+        report_definitions = None,
+        rules = None
     ):
         """
         NOTE: at least one param required.
@@ -56,20 +59,22 @@ class Drheader:
         self.anomalies = []
         self.url = url
         self.delimiter = ';'
+        self.report_definitions = report_definitions
+        self.rules = rules
 
         if isinstance(headers, str):
             self.headers = json.loads(headers)
 
         if self.url and not self.headers:
             self.headers, self.status_code = self._get_headers(
-                url, method, params, request_headers, verify
+                url, method, params, request_headers, verify,disable_redirects
             )
 
         # self.headers_lower = dict((k.lower(), v.lower()) for k, v in self.headers.items())
         self.report = []
 
     @staticmethod
-    def _get_headers(url, method, params, request_headers, verify):
+    def _get_headers(url, method, params, request_headers, verify,disable_redirects):
         """
         Get headers for specified url.
 
@@ -89,11 +94,13 @@ class Drheader:
 
         if validators.url(url):
             req_obj = getattr(requests, method.lower())
-            r = req_obj(url, data=params, headers=request_headers, verify=verify)
+            allow_redirect_value = not disable_redirects
+            r = req_obj(url, data=params, headers=request_headers, verify=verify,allow_redirects=allow_redirect_value)
 
             headers = r.headers
             if len(r.raw.headers.getlist('Set-Cookie')) > 0:
                 headers['set-cookie'] = r.raw.headers.getlist('Set-Cookie')
+            print(headers)
             return headers, r.status_code
 
     def analyze(self, rules=None):
@@ -137,7 +144,8 @@ class Drheader:
                 severity='high',
                 rule=rule,
                 error_type=1,
-                expected=expected_value_list
+                expected=expected_value_list,
+                definition=self.report_definitions[rule]
             )
         else:
             rule_list = [item.strip(' ') for item in self.headers[rule].split(self.delimiter)]
@@ -148,7 +156,8 @@ class Drheader:
                     rule=rule,
                     error_type=3,
                     expected=expected_value_list,
-                    value=self.headers[rule]
+                    value=self.headers[rule],
+                    definition=self.report_definitions[rule]
                 )
 
     def __validate_not_exists(self, rule):
@@ -162,7 +171,8 @@ class Drheader:
             self.__add_report_item(
                 severity='high',
                 rule=rule,
-                error_type=2
+                error_type=2,
+                definition=self.report_definitions[rule]
             )
 
     def __validate_exists(self, rule):
@@ -175,7 +185,8 @@ class Drheader:
             self.__add_report_item(
                 severity='high',
                 rule=rule,
-                error_type=1
+                error_type=1,
+                definition=self.report_definitions[rule]
             )
 
     def __validate_must_avoid(self, rule, config):
@@ -195,7 +206,8 @@ class Drheader:
                         rule=rule,
                         error_type=5,
                         avoid=config['Must-Avoid'],
-                        value=avoid
+                        value=avoid,
+                        definition=self.report_definitions[rule]
                     )
         except KeyError:
             pass
@@ -226,7 +238,8 @@ class Drheader:
                         rule=rule,
                         error_type=6,
                         expected=config['Must-Contain-One'],
-                        value=config['Must-Contain-One']
+                        value=config['Must-Contain-One'],
+                        definition=self.report_definitions[rule]
                     )
             elif 'Must-Contain' in config:
                 config['Must-Contain'] = [item.lower() for item in config['Must-Contain']]
@@ -241,7 +254,8 @@ class Drheader:
                                         error_type=4,
                                         expected=config['Must-Contain'],
                                         value=contain,
-                                        cookie=cookie
+                                        cookie=cookie,
+                                        definition=self.report_definitions[rule]
                                     )
                                 else:
                                     self.__add_report_item(
@@ -250,7 +264,8 @@ class Drheader:
                                         error_type=4,
                                         expected=config['Must-Contain'],
                                         value=contain,
-                                        cookie=cookie
+                                        cookie=cookie,
+                                        definition=self.report_definitions[rule]
                                     )
                 else:
                     for contain in config['Must-Contain']:
@@ -260,7 +275,8 @@ class Drheader:
                                 rule=rule,
                                 error_type=4,
                                 expected=config['Must-Contain'],
-                                value=contain
+                                value=contain,
+                                definition=self.report_definitions[rule]
                             )
         except KeyError:
             pass
@@ -293,10 +309,12 @@ class Drheader:
         severity,
         rule,
         error_type,
+        definition,
         expected=None,
         avoid=None,
         value='',
         cookie=''
+        
     ):
         """
         Add a entry to report.
@@ -312,19 +330,28 @@ class Drheader:
         :param value: Current value of header
         :param cookie: Value of cookie (if applicable)
         """
-
         error = {'rule': rule, 'severity': severity,
-                 'message': self.error_types[error_type]}
+                 'message': self.error_types[error_type], 'description': definition['Description'], 'mitigation': definition['Mitigation'], 'references': definition['References']}
 
         if expected:
+        
             error['expected'] = expected
             error['delimiter'] = self.delimiter
         if avoid:
             error['avoid'] = avoid
             error['delimiter'] = self.delimiter
+        if error_type in (1,5):
+            if 'Must-Contain-One' in self.rules[rule]:
+                error['mitigation'] = error['mitigation'].format('`,`'.join(self.rules[rule]['Must-Contain-One']))
+            else:
+                error['mitigation'] = error['mitigation'].format('`,`'.join(expected))
         if error_type == 3:
+            expected_values = ','.join(expected)
+            error['mitigation'] = error['mitigation'].format(expected_values)
             error['value'] = value
-
+        if error_type == 6:
+            expected_values = '`,`'.join(expected)
+            error['mitigation'] = error['mitigation'].format(expected_values)
         if error_type in (4, 5, 6):
             if rule == 'Set-Cookie':
                 error['value'] = cookie
